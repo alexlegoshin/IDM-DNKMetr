@@ -1,0 +1,18 @@
+{
+  "vendor": "АКИП (Siglent)",
+  "model": "АКИП-2101 / Siglent SDM3055",
+  "role": "multimeter",
+  "verified": false,
+  "notes": "НЕ проверено на реальном приборе (сейчас в стенде подключён другой АКИП — akip_b778.json). Портировано из IVtrace_dev/instruments/multimeters/akip2101.json; там использовался SENS:FUNC \"CURR:DC\" + RANG:AUTO OFF + READ?, здесь взяты обычные MEAS:VOLT:DC?/MEAS:CURR:DC? по аналогии с akip_b778.json — Siglent-платформа обычно их поддерживает, но сверить при первом реальном подключении именно этой модели.",
+  "connection": {
+    "type": "usbtmc",
+    "timeout_ms": 5000,
+    "write_termination": "\n",
+    "read_termination": "\n"
+  },
+  "commands": {
+    "idn": "*IDN?",
+    "measure_dc_voltage": "MEAS:VOLT:DC?",
+    "measure_dc_current": "MEAS:CURR:DC?"
+  }
+}
