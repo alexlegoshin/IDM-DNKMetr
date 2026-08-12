@@ -14,9 +14,10 @@
 от CSV в пользу простого "промерили — посмотрели на экране").
 """
 
+import os
 import queue
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 import yaml
 
@@ -24,12 +25,20 @@ from bench import BenchController, ERROR, FINE_TUNING, HOLDING, STABILIZING
 
 POLL_MS = 150
 SETPOINTS_MA = [5.0, 10.0]
+WIRING_DIAGRAM_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wiring_diagram.png")
+WIRING_DIAGRAM_DISCLAIMER = (
+    "Схема ПРИБЛИЗИТЕЛЬНАЯ — не отображает разъёмы, порядок контактов и т.п.\n"
+    "Нужна только для сборки измерительного стенда согласно всем маркировкам\n"
+    "на самих датчиках и оборудовании."
+)
 
 
 class App:
     def __init__(self, root, cfg):
         self.root = root
         self.bench = BenchController(cfg)
+        self._wiring_window = None
+        self._wiring_photo = None  # ссылка нужна, иначе Tk соберёт картинку в мусор
 
         root.title("ДНК-метр — промер датчика")
         root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -61,6 +70,9 @@ class App:
             btn_frame, text="Приостановить стенд", command=self._on_pause, state="disabled"
         )
         self.btn_pause.pack(side="left", padx=6)
+        ttk.Button(
+            btn_frame, text="Схема подключения", command=self._on_show_wiring
+        ).pack(side="right")
 
         # --- статус ---
         status_frame = ttk.LabelFrame(main, text="Статус", padding=8)
@@ -113,6 +125,38 @@ class App:
     def _on_close(self):
         self.bench.close()
         self.root.destroy()
+
+    def _on_show_wiring(self):
+        # Не плодим окна при повторных кликах - если уже открыто, просто поднимаем.
+        if self._wiring_window is not None and self._wiring_window.winfo_exists():
+            self._wiring_window.lift()
+            self._wiring_window.focus_force()
+            return
+
+        if not os.path.isfile(WIRING_DIAGRAM_PATH):
+            messagebox.showerror(
+                "Схема подключения",
+                f"Файл не найден: {WIRING_DIAGRAM_PATH}",
+            )
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Схема подключения (приблизительная)")
+        win.protocol("WM_DELETE_WINDOW", lambda: self._on_close_wiring(win))
+        self._wiring_window = win
+
+        ttk.Label(
+            win, text=WIRING_DIAGRAM_DISCLAIMER, foreground="red",
+            font=("Segoe UI", 10, "bold"), justify="left", padding=8,
+        ).pack(anchor="w")
+
+        self._wiring_photo = tk.PhotoImage(file=WIRING_DIAGRAM_PATH)
+        ttk.Label(win, image=self._wiring_photo).pack(padx=8, pady=(0, 8))
+
+    def _on_close_wiring(self, win):
+        win.destroy()
+        self._wiring_window = None
+        self._wiring_photo = None
 
     # --- обновление из фонового потока ---
 
