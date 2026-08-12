@@ -13,6 +13,7 @@ build_instruments() не меняется.
 
 import glob
 import json
+import logging
 import os
 import time
 
@@ -21,6 +22,8 @@ import pyvisa
 from drivers import PowerSupply, Multimeter, _DEFAULT_BAUD_CANDIDATES
 
 DEFAULT_INSTRUMENTS_DIR = os.path.join(os.path.dirname(__file__), "instruments")
+
+log = logging.getLogger(__name__)
 
 
 def load_profiles(instruments_dir=DEFAULT_INSTRUMENTS_DIR):
@@ -45,7 +48,14 @@ def _match_profile(idn, profiles):
 
 def _try_idn(rm, resource, timeout_ms, baud=None):
     """Одна попытка открыть ресурс и получить *IDN?. baud=None — не serial
-    (USB0/GPIB/TCPIP, настройки VISA по умолчанию)."""
+    (USB0/GPIB/TCPIP, настройки VISA по умолчанию).
+
+    Раньше исключение здесь проглатывалось молча — при перемежающихся сбоях
+    связи (см. _probe_idn) это делало причину невозможно понять постфактум,
+    оставалась только строка "источник не найден" без объяснения ПОЧЕМУ.
+    Теперь полное исключение (тип+сообщение) идёт в лог (см. ui.main(),
+    logging настраивается на файл dnkmeter.log рядом с exe/config.yaml).
+    """
     try:
         inst = rm.open_resource(resource)
         inst.timeout = timeout_ms
@@ -57,8 +67,13 @@ def _try_idn(rm, resource, timeout_ms, baud=None):
             inst.clear()
         reply = inst.query("*IDN?").strip()
         inst.close()
-        return reply if reply else None
-    except Exception:
+        if not reply:
+            log.warning("_try_idn: %s baud=%s — пустой ответ на *IDN?", resource, baud)
+            return None
+        return reply
+    except Exception as exc:
+        log.warning("_try_idn: %s baud=%s — %s: %s",
+                    resource, baud, type(exc).__name__, exc)
         try:
             inst.close()
         except Exception:
@@ -100,20 +115,26 @@ def discover_all(instruments_dir=DEFAULT_INSTRUMENTS_DIR, timeout_ms=3000):
     """
     profiles = load_profiles(instruments_dir)
     rm = pyvisa.ResourceManager()
+    resources = rm.list_resources()
+    log.info("discover_all: list_resources() -> %s", resources)
     result = {"power_supply": [], "multimeter": [], "unmatched": []}
 
-    for resource in rm.list_resources():
+    for resource in resources:
         idn = _probe_idn(rm, resource, timeout_ms)
         if idn is None:
+            log.warning("discover_all: %s не ответил ни на одной попытке", resource)
             result["unmatched"].append((resource, None))
             continue
         path, profile = _match_profile(idn, profiles)
         if profile is None:
+            log.warning("discover_all: %s ответил %r, но не подошёл ни под один профиль",
+                       resource, idn)
             result["unmatched"].append((resource, idn))
             continue
         entry = {"resource": resource, "path": path, "profile": profile, "idn": idn}
         role = profile["role"]
         result.setdefault(role, []).append(entry)
+        log.info("discover_all: %s -> role=%s idn=%r", resource, role, idn)
 
     return result
 

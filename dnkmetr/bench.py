@@ -16,6 +16,7 @@
 не открываются, пока не вызван close().
 """
 
+import logging
 import queue
 import threading
 import time
@@ -27,6 +28,8 @@ from measure import (
     check_feedback_path,
     preflight_check_instruments,
 )
+
+log = logging.getLogger(__name__)
 
 IDLE = "ожидание"
 CONNECTING = "проверка приборов"
@@ -121,6 +124,9 @@ class BenchController:
                 self._update_live(current)
 
         except Exception as exc:
+            # Полный traceback — в лог (см. ui.main(), dnkmeter.log рядом с exe);
+            # в UI по-прежнему короткий str(exc), чтобы не захламлять статус-бар.
+            log.exception("BenchController._run упал")
             self.error_message = str(exc)
             self._set_state(ERROR, str(exc))
             try:

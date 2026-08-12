@@ -14,6 +14,7 @@
 от CSV в пользу простого "промерили — посмотрели на экране").
 """
 
+import logging
 import os
 import queue
 import sys
@@ -228,6 +229,19 @@ def main():
     # запуске "python ui.py" из dnkmetr/, что при запуске собранного exe откуда
     # угодно (двойным кликом, ярлыком с другим "Start in" и т.п.).
     os.chdir(BASE_DIR)
+
+    # dnkmeter.log рядом с exe — единственное, что этот UI пишет на диск (см.
+    # докстринг модуля: результаты измерений сознательно не сохраняются, но
+    # техническую диагностику подключения приборов нужно видеть постфактум,
+    # а не только в момент сбоя на экране — см. эпизод 12.08.2026 с
+    # "источник не найден", который было невозможно расследовать без лога.
+    logging.basicConfig(
+        filename=os.path.join(BASE_DIR, "dnkmeter.log"),
+        level=logging.DEBUG,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    logging.info("=== DNKMeter запущен, BASE_DIR=%s ===", BASE_DIR)
+
     with open("config.yaml", "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
