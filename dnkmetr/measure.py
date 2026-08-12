@@ -9,8 +9,49 @@ import csv
 import os
 import time
 
+import discover
 from current_control import HardwareCCController, SoftwarePIController
 from drivers import FakeMultimeter, FakePowerSupply, Multimeter, PowerSupply
+
+
+def _build_instruments_auto(cfg):
+    """instruments.auto_detect: true — вместо явных profile/resource ищем приборы
+    по *IDN? (см. discover.py) и сами разводим, какой мультиметр в петле ОС, а
+    какой на выходе датчика. Гибко к перестановке физических приборов местами
+    и к замене экземпляра одной и той же модели — не нужно править config.yaml
+    руками после каждой пересборки стенда (журнал 12.08.2026)."""
+    found = discover.discover_all()
+
+    if not found["power_supply"]:
+        raise RuntimeError(
+            "Автообнаружение: не найден источник питания. Обнаружено на шине: "
+            f"{[(r, idn) for r, idn in found['unmatched']]}"
+        )
+    if len(found["power_supply"]) > 1:
+        raise RuntimeError(
+            f"Автообнаружение: найдено {len(found['power_supply'])} источников питания — "
+            "неоднозначно, какой использовать. Задай profile/resource явно в config.yaml."
+        )
+    supply_entry = found["power_supply"][0]
+    print(f"[discover] источник питания: {supply_entry['resource']} ({supply_entry['idn']})")
+
+    roles = discover.assign_multimeter_roles(supply_entry, found["multimeter"])
+    if roles["measurement"] is None:
+        raise RuntimeError(
+            "Автообнаружение: найден только один мультиметр "
+            f"({roles['feedback']['resource']}) — нужен второй для роли measurement. "
+            "Задай profile/resource явно в config.yaml, если measurement-прибора "
+            "физически нет на стенде."
+        )
+    print(f"[discover] feedback_multimeter: {roles['feedback']['resource']} "
+          f"({roles['feedback']['idn']})")
+    print(f"[discover] measurement_multimeter: {roles['measurement']['resource']} "
+          f"({roles['measurement']['idn']})")
+
+    supply = PowerSupply(supply_entry["path"], supply_entry["resource"])
+    feedback_dmm = Multimeter(roles["feedback"]["path"], roles["feedback"]["resource"])
+    measurement_dmm = Multimeter(roles["measurement"]["path"], roles["measurement"]["resource"])
+    return supply, feedback_dmm, measurement_dmm
 
 
 def build_instruments(cfg):
@@ -21,6 +62,9 @@ def build_instruments(cfg):
         return supply, feedback_dmm, measurement_dmm
 
     instr_cfg = cfg["instruments"]
+    if instr_cfg.get("auto_detect"):
+        return _build_instruments_auto(cfg)
+
     supply = PowerSupply(instr_cfg["power_supply"]["profile"], instr_cfg["power_supply"]["resource"])
     feedback_dmm = Multimeter(
         instr_cfg["feedback_multimeter"]["profile"], instr_cfg["feedback_multimeter"]["resource"]
@@ -29,6 +73,29 @@ def build_instruments(cfg):
         instr_cfg["measurement_multimeter"]["profile"], instr_cfg["measurement_multimeter"]["resource"]
     )
     return supply, feedback_dmm, measurement_dmm
+
+
+def preflight_check_instruments(supply, feedback_dmm, measurement_dmm):
+    """Проверяет, что все ТРИ прибора живы и отвечают на idn ДО начала сессии —
+    отдельно от check_feedback_path() (которая проверяет уже саму токовую петлю,
+    а не факт связи с приборами). Ловит банальное "прибор не включен/не тот COM-порт"
+    сразу, одним понятным сообщением на все три сразу, а не как отдельный сбой
+    посреди первого измерения."""
+    checks = [("power_supply", supply), ("feedback_multimeter", feedback_dmm),
+              ("measurement_multimeter", measurement_dmm)]
+    failures = []
+    for name, inst in checks:
+        try:
+            idn = inst.idn()
+            if not idn:
+                raise ValueError("пустой ответ")
+            print(f"[preflight] {name}: {idn}")
+        except Exception as exc:
+            failures.append(f"{name}: {exc}")
+    if failures:
+        raise RuntimeError(
+            "Предполётная проверка приборов не прошла:\n  " + "\n  ".join(failures)
+        )
 
 
 def build_controller(cfg, supply, feedback_dmm):
@@ -84,6 +151,15 @@ def check_feedback_path(supply, feedback_dmm, probe_voltage=10.0,
     Проверка по приращению самого ОС-мультиметра не зависит от точности
     источника и всё ещё ловит реальный обрыв (см. эпизод 29.07.2026, когда
     RIGOL был физически вне цепи и показывал ~1.3 нА независимо от напряжения).
+
+    current_limit здесь — это ограничение ТОЛЬКО на время самой пробы (низкое
+    и безопасное для щупа на неизвестной цепи). Рабочий current_limit для
+    самого измерения (measure_one()) run_session() выставляет ОТДЕЛЬНО, уже
+    после этой проверки — раньше measure_one() неявно наследовал то, что здесь
+    осталось выставлено, и на реальном датчике (см. current_control.py,
+    coarse_seed()) это оказывалось слишком тесно относительно переразгона
+    бисекции при сходимости — источник упирался в лимит и терял управляемость
+    вместо плавной подстройки (эпизод 12.08.2026).
     """
     supply.set_current_limit(current_limit)
     supply.set_voltage(0.0)
@@ -111,9 +187,18 @@ def check_feedback_path(supply, feedback_dmm, probe_voltage=10.0,
     return i_psu, i_dmm
 
 
+FINAL_AVERAGE_SAMPLES = 5
+# После is_stable() ток уже держится у уставки, но одиночный отсчёт всё ещё несёт
+# статистический шум измерения (на реальном ДНК-М эмпирически std~0.016мА,
+# p2p~0.069мА за 30с удержания, см. журнал испытаний 12.08.2026) — усреднение
+# нескольких отсчётов подряд убирает этот шум из ИТОГОВОГО записанного значения,
+# не изменяя саму регулировку (step() продолжает штатно подруливать напряжение
+# на каждом отсчёте, а не замораживается).
+
+
 def measure_one(controller, measurement_dmm, sensor_type, k_coeff,
                  shunt_ohms, measurement_mode, timeout=10.0,
-                 max_saturated_steps=10):
+                 max_saturated_steps=10, fine_deadband=None, fine_timeout=0.0):
     controller.supply.enable_output(True)
     if hasattr(controller, "coarse_seed"):
         # Грубый бисекционный поиск стартового напряжения — на порядок быстрее
@@ -124,6 +209,16 @@ def measure_one(controller, measurement_dmm, sensor_type, k_coeff,
     start = time.monotonic()
     current = None
     stabilized = False
+    # Двухуровневый запасной план на случай, если обычный ПИ упёрся в потолок
+    # напряжения и сам не выкарабкивается (см. saturated_steps в
+    # current_control.py): сначала узкая бисекция вокруг текущей точки
+    # (быстро, для небольшого сбоя), и только если это тоже не помогло —
+    # полный бинарный поиск с нуля по всему [0, max_voltage] (для случая
+    # "всё слетело", например датчик физически переподключили и рабочая
+    # точка теперь совсем другая — узкое окно вокруг старой точки её не
+    # найдёт).
+    tried_narrow_reseed = False
+    tried_full_reseed = False
 
     while time.monotonic() - start < timeout:
         current = controller.step()
@@ -131,24 +226,54 @@ def measure_one(controller, measurement_dmm, sensor_type, k_coeff,
             stabilized = True
             break
         if getattr(controller, "saturated_steps", 0) >= max_saturated_steps:
+            if not tried_narrow_reseed and hasattr(controller, "reseed_from_current"):
+                controller.reseed_from_current()
+                window = []
+                tried_narrow_reseed = True
+                continue
+            if not tried_full_reseed and hasattr(controller, "coarse_seed"):
+                controller.coarse_seed()
+                window = []
+                tried_full_reseed = True
+                continue
             controller.supply.enable_output(False)
             raise RuntimeError(
                 f"Напряжение упёрлось в потолок {controller.max_voltage} В, а ток "
                 f"({current * 1000:.4f} мА) далёк от уставки "
-                f"({controller.setpoint * 1000:.3f} мА). Похоже на обрыв цепи или "
-                "слишком высокое сопротивление нагрузки."
+                f"({controller.setpoint * 1000:.3f} мА), даже после пересева узкой "
+                "и полной бисекцией. Похоже на обрыв цепи или слишком высокое "
+                "сопротивление нагрузки."
             )
 
     if not stabilized:
         controller.supply.enable_output(False)
         raise TimeoutError("Ток не стабилизировался за отведённое время")
 
+    # Точная стадия (необязательная): пробуем дотянуть до более тугого допуска
+    # за ОТДЕЛЬНЫЙ бюджет времени, не в ущерб основной сходимости выше. Если не
+    # успели за fine_timeout — просто остаёмся на уже достигнутой (более грубой)
+    # точности, без ошибки: точная подстройка — бонус, а не обязательное условие.
+    if fine_deadband is not None and fine_timeout > 0:
+        fine_start = time.monotonic()
+        fine_window = []
+        while time.monotonic() - fine_start < fine_timeout:
+            current = controller.step()
+            if controller.is_stable(current, fine_window, deadband=fine_deadband):
+                break
+
+    final_currents = [current]
+    for _ in range(FINAL_AVERAGE_SAMPLES - 1):
+        final_currents.append(controller.step())
+    current = sum(final_currents) / len(final_currents)
+
     if measurement_mode == "voltage_across_shunt":
-        raw_voltage = measurement_dmm.measure_dc_voltage()
+        raw_voltage = sum(measurement_dmm.measure_dc_voltage()
+                          for _ in range(FINAL_AVERAGE_SAMPLES)) / FINAL_AVERAGE_SAMPLES
         output_current = raw_voltage / shunt_ohms
     elif measurement_mode == "direct_current":
         raw_voltage = None
-        output_current = measurement_dmm.measure_dc_current()
+        output_current = sum(measurement_dmm.measure_dc_current()
+                             for _ in range(FINAL_AVERAGE_SAMPLES)) / FINAL_AVERAGE_SAMPLES
     else:
         raise ValueError(f"Неизвестный measurement_mode: {measurement_mode!r}")
 
@@ -185,11 +310,26 @@ def run_session(cfg):
     measurement_mode = circuit_cfg["measurement_mode"]
 
     supply, feedback_dmm, measurement_dmm = build_instruments(cfg)
+    if cfg["mode"] != "fake":
+        preflight_check_instruments(supply, feedback_dmm, measurement_dmm)
     controller = build_controller(cfg, supply, feedback_dmm)
     timeout = cfg["current_loop"]["timeout_s"]
     csv_path = cfg["output"]["csv_path"]
     fieldnames = ["sensor_name", "sensor_type", "current_a",
                   "raw_voltage_v", "output_current_a", "output_value", "ts"]
+
+    # Рабочий current_limit — ОТДЕЛЬНО от того, что check_feedback_path() выставляет
+    # на время своей пробы (см. её docstring). Без запаса выше уставки источник может
+    # упереться в лимит прямо во время сходимости (переразгон бисекции на реальном
+    # датчике с задержкой отклика, эпизод 12.08.2026) и потерять управляемость.
+    current_limit = cfg["current_loop"].get(
+        "current_limit_a", cfg["current_loop"]["setpoint_a"] * 1.5
+    )
+    # Точная стадия после базовой стабилизации (см. measure_one()) — необязательная,
+    # включается только если оба параметра заданы в конфиге. fine_deadband_a=None
+    # (по умолчанию) полностью её отключает, оставляя только базовый deadband_a.
+    fine_deadband = cfg["current_loop"].get("fine_deadband_a")
+    fine_timeout = cfg["current_loop"].get("fine_timeout_s", 0.0)
 
     for sensor in cfg["sensors"]:
         _wait_for_operator(sensor["name"], sensor["type"])
@@ -197,6 +337,7 @@ def run_session(cfg):
             i_psu, i_dmm = check_feedback_path(supply, feedback_dmm)
             print(f"[{sensor['name']}] цепь ок: источник {i_psu * 1000:.3f} мА, "
                   f"ОС {i_dmm * 1000:.3f} мА")
+            supply.set_current_limit(current_limit)
             result = measure_one(
                 controller, measurement_dmm,
                 sensor_type=sensor["type"],
@@ -204,6 +345,8 @@ def run_session(cfg):
                 shunt_ohms=shunt_ohms,
                 measurement_mode=measurement_mode,
                 timeout=timeout,
+                fine_deadband=fine_deadband,
+                fine_timeout=fine_timeout,
             )
         except (TimeoutError, RuntimeError) as exc:
             print(f"[{sensor['name']}] ОШИБКА: {exc}")
