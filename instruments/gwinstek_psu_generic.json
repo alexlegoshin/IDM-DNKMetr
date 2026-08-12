@@ -1,0 +1,32 @@
+{
+  "vendor": "GW Instek",
+  "model": "GPP-4323 (шильдик 74323)",
+  "role": "power_supply",
+  "idn_match": ["GW INSTEK", "GPP-4323", "GPP-74323"],
+  "verified": true,
+  "notes": "Проверено вживую 29.07.2026: ASRL-порт (COM4 после установки официального драйвера 'GWInstek GPP-Series Driver Setup' с сайта gwinstek.com — устройство представляется в Windows как vendor-specific USB-Serial, VID_2184&PID_0057, не CH340/CH341-совместимый CDC, поэтому обычный CH341SER-драйвер НЕ подходит). *IDN? отвечает: 'GW INSTEK,GPP-74323,SN:GEZ823770,V1.22', оба варианта write_termination ('\\n' и '\\r\\n') сработали одинаково. Синтаксис команд взят из IVtrace_dev/instruments/voltage_sources/gpp74323.json (сверено по GPP-Series_User_manual_EN_REVG_20240506.pdf, стр. 128, 133-135). Канал '1' захардкожен в шаблонах команд ниже осознанно: в tracking-series режиме (TRACK1, CH1=master+CH2=slave объединены без общей точки, суммарно 0-64В на клеммах CH1(+)/CH2(-)) управление напряжением/током идёт только через CH1 — это следствие физической проводки, а не runtime-выбор, поэтому меняется через правку JSON, а не кода. ВСЕ команды профиля подтверждены вживую 29.07.2026 на реальном приборе: VSET1:/ISET1: пишутся (readback VSET1?/ISET1? совпадает с заданным), ALLOUTON/ALLOUTOFF реально включают и гасят выход, VOUT1?/IOUT1? читаются. ВАЖНО: VOUT1?/IOUT1? отвечают С СУФФИКСОМ ЕДИНИЦ ('00.000V', '0.0000A') — голый float() на таком ответе падает, поэтому drivers.query_number() вытаскивает число регуляркой. Ещё не проверено: возвращает ли VOUT1? в tracking-series сумму 0-64В или только напряжение CH1 (проверка требует исправной нагрузки). ВАЖНО (12.08.2026): baud_rate — это настройка САМОГО ПРИБОРА (System->Interface->USB на передней панели), не свойство модели GPP-4323 — у другого физического экземпляра (SN:GEZ823773 вместо GEZ823770) при первом подключении был выставлен 9600, а не 115200. Поэтому здесь \"baud_rate\": \"auto\" — drivers.ScpiInstrument перебирает baud_rate_candidates и сам находит рабочую скорость по ответу на *IDN? (см. drivers.py, _detect_baud()), не полагаясь на то, что кто-то не поменял её на приборе руками.",
+  "connection": {
+    "type": "serial",
+    "baud_rate": "auto",
+    "baud_rate_candidates": [9600, 19200, 38400, 57600, 115200],
+    "data_bits": 8,
+    "parity": "none",
+    "stop_bits": 1,
+    "timeout_ms": 5000,
+    "write_termination": "\n",
+    "read_termination": "\n"
+  },
+  "commands": {
+    "idn": "*IDN?",
+    "set_voltage": "VSET1:{value:.4f}",
+    "set_current_limit": "ISET1:{value:.4f}",
+    "enable_output": "{state}",
+    "measure_voltage": "VOUT1?",
+    "measure_current": "IOUT1?"
+  },
+  "output_on_value": "ALLOUTON",
+  "output_off_value": "ALLOUTOFF",
+  "init_commands_reference": ["*RST", "TRACK1"],
+  "max_voltage_v": 64.0,
+  "max_current_limit_a": 3.0
+}

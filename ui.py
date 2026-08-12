@@ -10,8 +10,8 @@
     4. "Приостановить стенд" — гасит выход, можно переподключать датчик.
        Дальше снова с шага 1/2 — по кругу.
 
-Ничего не пишет на диск (см. README.md/PLAN.md, 12.08.2026: сознательный отказ
-от CSV в пользу простого "промерили — посмотрели на экране").
+Ничего не пишет на диск, кроме служебного dnkmeter.log (см. README.md:
+сознательный отказ от CSV в пользу простого "промерили — посмотрели на экране").
 """
 
 import logging
@@ -38,7 +38,7 @@ if getattr(sys, "frozen", False):
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-WIRING_DIAGRAM_PATH = os.path.join(BASE_DIR, "wiring_diagram.png")
+WIRING_DIAGRAM_PATH = os.path.join(BASE_DIR, "images", "wiring_diagram.png")
 WIRING_DIAGRAM_DISCLAIMER = (
     "Схема ПРИБЛИЗИТЕЛЬНАЯ — не отображает разъёмы, порядок контактов и т.п.\n"
     "Нужна только для сборки измерительного стенда согласно всем маркировкам\n"
@@ -226,8 +226,8 @@ class App:
 def main():
     # chdir на BASE_DIR — тогда config.yaml и относительные пути профилей внутри
     # него ("instruments/xxx.json", см. drivers.py) резолвятся одинаково что при
-    # запуске "python ui.py" из dnkmetr/, что при запуске собранного exe откуда
-    # угодно (двойным кликом, ярлыком с другим "Start in" и т.п.).
+    # запуске "python ui.py" из корня проекта, что при запуске собранного exe
+    # откуда угодно (двойным кликом, ярлыком с другим "Start in" и т.п.).
     os.chdir(BASE_DIR)
 
     # dnkmeter.log рядом с exe — единственное, что этот UI пишет на диск (см.

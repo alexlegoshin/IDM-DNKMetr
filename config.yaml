@@ -1,8 +1,8 @@
 # mode: fake — без железа (для отладки), real — реальные приборы через VISA
 mode: real
 
-# controller: hardware_cc — если источник поддерживает аппаратный CC (см. PLAN.md, раздел 0)
-#             software_pi — если только CV, регулируем сами
+# controller: hardware_cc — если источник поддерживает аппаратный CC
+#             software_pi — если только CV, регулируем сами (см. README.md)
 controller: software_pi
 
 # Каждый прибор = JSON-профиль (instruments/*.json, описывает SCPI-команды и параметры
@@ -56,8 +56,8 @@ instruments:
     profile: "instruments/akip_b778.json"
     resource: "USB0::0x164E::0x0DAD::TW00053362::INSTR"
 
-# Коэффициенты ниже подобраны на модели нагрузки (см. tune_current_loop.py), а не на
-# реальном датчике — перед работой с настоящим стендом перетюнить (PLAN.md, итерация 2).
+# Коэффициенты ниже изначально подбирались на модели нагрузки (см. tune_current_loop.py),
+# позже проверены и работают приемлемо на реальном ДНК-М (см. README.md).
 current_loop:
   setpoint_a: 0.010        # 10 мА
   deadband_a: 0.0002       # 0.2 мА — базовая (быстрая) стабилизация, как и было.
