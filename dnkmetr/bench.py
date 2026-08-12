@@ -20,6 +20,7 @@ import queue
 import threading
 import time
 
+from accuracy import compute_gost_accuracy
 from measure import (
     build_controller,
     build_instruments,
@@ -202,6 +203,7 @@ class BenchController:
             "std_a": std,
             "sem_a": sem,
             "feedback_a": self.live_feedback_a,
+            "accuracy": compute_gost_accuracy(mean, self.controller.setpoint),
             "ts": time.time(),
         }
 

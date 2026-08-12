@@ -16,6 +16,7 @@
 
 import os
 import queue
+import sys
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -25,7 +26,18 @@ from bench import BenchController, ERROR, FINE_TUNING, HOLDING, STABILIZING
 
 POLL_MS = 150
 SETPOINTS_MA = [5.0, 10.0]
-WIRING_DIAGRAM_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wiring_diagram.png")
+
+# В собранном PyInstaller-exe (--onefile) __file__ указывает во временную
+# распакованную папку (_MEIPASS), а config.yaml/instruments/*.json/картинка
+# схемы должны лежать РЯДОМ С EXE, чтобы их можно было редактировать без
+# пересборки — поэтому базовая директория берётся от sys.executable, если
+# приложение заморожено, а не от __file__.
+if getattr(sys, "frozen", False):
+    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+WIRING_DIAGRAM_PATH = os.path.join(BASE_DIR, "wiring_diagram.png")
 WIRING_DIAGRAM_DISCLAIMER = (
     "Схема ПРИБЛИЗИТЕЛЬНАЯ — не отображает разъёмы, порядок контактов и т.п.\n"
     "Нужна только для сборки измерительного стенда согласно всем маркировкам\n"
@@ -188,10 +200,17 @@ class App:
                 _, result = event
                 feedback_str = (f"{result['feedback_a']*1000:.3f} мА"
                                 if result["feedback_a"] is not None else "—")
+                acc = result["accuracy"]
+                if acc["computed"]:
+                    acc_str = (f"γ={acc['gamma_percent']:.4f}% (ГОСТ 8.401-80, "
+                              f"номинал {acc['nominal_a']*1000:.1f} мА, "
+                              f"Δ={acc['delta_a']*1000:.4f} мА)")
+                else:
+                    acc_str = acc["note"]
                 self._log(
                     f"измерение: {result['mean_a']*1000:.4f} ± {result['sem_a']*1000:.4f} мА "
                     f"(std={result['std_a']*1000:.4f}, n={len(result['samples'])}, "
-                    f"I_петли={feedback_str})"
+                    f"I_петли={feedback_str}) | {acc_str}"
                 )
             elif kind == "measurement_error":
                 _, message = event
@@ -204,6 +223,11 @@ class App:
 
 
 def main():
+    # chdir на BASE_DIR — тогда config.yaml и относительные пути профилей внутри
+    # него ("instruments/xxx.json", см. drivers.py) резолвятся одинаково что при
+    # запуске "python ui.py" из dnkmetr/, что при запуске собранного exe откуда
+    # угодно (двойным кликом, ярлыком с другим "Start in" и т.п.).
+    os.chdir(BASE_DIR)
     with open("config.yaml", "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
