@@ -16,6 +16,12 @@ instruments:
 
   # feedback_multimeter — в контуре обратной связи: держит основной ток возбуждения
   # через датчик на уставке (SoftwarePIController читает именно его на каждом шаге).
+  # ОТКРЫТАЯ ПРОБЛЕМА: этот конкретный RIGOL подозревается в частично перегоревшем
+  # предохранителе токового входа (см. instruments/rigol_dm3068.json notes и
+  # README.md корня репозитория). Смена на другой прибор — это только правка
+  # profile+resource ниже, без изменений в коде: instruments/akip_2101.json
+  # (не проверен вживую) или instruments/akip_b778.json на втором физическом
+  # экземпляре, если он есть.
   feedback_multimeter:
     profile: "instruments/rigol_dm3068.json"
     resource: "USB0::0x1AB1::0x0C94::DM3O274802599::INSTR"

@@ -3,7 +3,7 @@
   "model": "АКИП-2101 / Siglent SDM3055",
   "role": "multimeter",
   "verified": false,
-  "notes": "НЕ проверено на реальном приборе (сейчас в стенде подключён другой АКИП — akip_b778.json). Портировано из IVtrace_dev/instruments/multimeters/akip2101.json; там использовался SENS:FUNC \"CURR:DC\" + RANG:AUTO OFF + READ?, здесь взяты обычные MEAS:VOLT:DC?/MEAS:CURR:DC? по аналогии с akip_b778.json — Siglent-платформа обычно их поддерживает, но сверить при первом реальном подключении именно этой модели.",
+  "notes": "НЕ проверено на реальном приборе (в стенде IDM-DNKMeter подключён другой АКИП — akip_b778.json; и старая, и новая версии этого файла оценивались только на нём). Обновлено 12.08.2026 по свежей версии IVTrace-dev/IDM-IVTrace (instruments/multimeters_current/akip2101.json, instruments/multimeters_voltage/akip2101.json) — там команды сверены НЕПОСРЕДСТВЕННО по официальному Siglent SDM Series Programming Guide (SDM3055/SDM3045/SDM3065), а не взяты по аналогии, как в предыдущей версии этого файла. Ключевая находка: голый самодостаточный MEAS:CURR:DC?/MEAS:VOLT:DC? (который у RIGOL/АКИП-B778 в этом проекте подтверждён вживую) для этой Siglent-платформы по документации НЕ описан как самодостаточный — вместо этого нужен явный выбор функции перед чтением: SENS:FUNC \"CURR:DC\"/\"VOLT:DC\" + NPLC, затем READ?. Чтобы не трогать drivers.py (у ScpiInstrument нет отдельного шага init_commands, только один command-шаблон на измерение), обе команды здесь — это цепочка SCPI через ';' в одной строке: выбор функции + NPLC + READ? за один write/query, эквивалент того, что в IVTrace-dev разнесено на init_commands+measure_command. Диапазоны по документации: ток [0.0002, 0.002, 0.02, 0.2, 2.0, 10.0] А, напряжение [0.2, 2.0, 20.0, 200.0, 1000.0] В (ручной диапазон здесь не подключён, manual_range-аналога в схеме этого проекта нет). Перед реальным использованием — обязательно сверить вживую на настоящем АКИП-2101/SDM3055.",
   "connection": {
     "type": "usbtmc",
     "timeout_ms": 5000,
@@ -12,7 +12,7 @@
   },
   "commands": {
     "idn": "*IDN?",
-    "measure_dc_voltage": "MEAS:VOLT:DC?",
-    "measure_dc_current": "MEAS:CURR:DC?"
+    "measure_dc_voltage": "SENS:FUNC \"VOLT:DC\";SENS:VOLT:DC:NPLC 1;READ?",
+    "measure_dc_current": "SENS:FUNC \"CURR:DC\";SENS:CURR:DC:NPLC 1;READ?"
   }
 }
