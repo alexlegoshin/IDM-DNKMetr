@@ -154,7 +154,7 @@ def discover_all(instruments_dir=DEFAULT_INSTRUMENTS_DIR, timeout_ms=3000):
 
 
 def assign_multimeter_roles(power_supply_entry, multimeter_entries,
-                            probe_voltage=5.0, current_limit=0.012,
+                            probe_voltage=10.0, current_limit=0.012,
                             settle_s=1.0, min_delta_current=0.0003):
     """Определяет, какой из найденных мультиметров стоит в разрыве петли
     возбуждения (feedback), а какой — на выходе датчика (measurement), по
@@ -162,13 +162,17 @@ def assign_multimeter_roles(power_supply_entry, multimeter_entries,
     модели/IDN (обе роли в этом проекте не раз занимала одна и та же модель
     B7-78/1 под разными серийниками, см. config.yaml/README.md).
 
-    Приём — тот же, что в measure.check_feedback_path(), но одновременно для
-    ВСЕХ кандидатов: тот, чьи показания заметнее всего вырастут при пробном
-    напряжении, физически стоит в петле возбуждения источника — это и есть
-    feedback. Остальные (обычно один) достаются measurement по остаточному
-    принципу. Датчик при этом может ещё не проводить на пробном токе — так
-    что "measurement не увидел роста" ожидаемо и не считается ошибкой,
-    в отличие от check_feedback_path(), которая как раз ищет обрыв feedback.
+    ИСПРАВЛЕНО (эпизод 12.08.2026): раньше feedback определялся как "у кого
+    дельта БОЛЬШЕ" — неверно для датчика с усилением вход->выход (у ДНК-М
+    выход в разы больше входа, коэффициент растёт с уровнем возбуждения, см.
+    README.md), из-за чего measurement-мультиметр (видит усиленный ток на
+    выходе) регулярно перетягивал на себя роль feedback, хотя физически стоял
+    не в той петле. Теперь feedback определяется как тот, чья дельта БЛИЖЕ к
+    дельте СОБСТВЕННОГО амперметра источника (supply.measure_current()) — оба
+    меряют один и тот же физический ток в одной и той же петле возбуждения,
+    поэтому должны быть близки независимо от грубости встроенного амперметра
+    источника; выход датчика — физически другая, независимо генерируемая
+    величина, и её близость к показаниям источника ничем не гарантирована.
 
     Если кандидат один — он безальтернативно feedback, measurement остаётся
     не назначен (вызывающий код должен решить, что с этим делать). Если
@@ -194,10 +198,12 @@ def assign_multimeter_roles(power_supply_entry, multimeter_entries,
         supply.set_voltage(0.0)
         supply.enable_output(True)
         time.sleep(0.5)
+        baseline_psu = abs(supply.measure_current())
         baselines = [abs(dmm.measure_dc_current()) for dmm in dmms]
 
         supply.set_voltage(probe_voltage)
         time.sleep(settle_s)
+        probed_psu = abs(supply.measure_current())
         probed = [abs(dmm.measure_dc_current()) for dmm in dmms]
     finally:
         supply.set_voltage(0.0)
@@ -206,19 +212,26 @@ def assign_multimeter_roles(power_supply_entry, multimeter_entries,
         for dmm in dmms:
             dmm.close()
 
+    delta_psu = probed_psu - baseline_psu
     deltas = [p - b for p, b in zip(probed, baselines)]
-    feedback_idx = deltas.index(max(deltas))
+    log.info("assign_multimeter_roles: delta_psu=%.5fмА, deltas=%s мА",
+             delta_psu * 1000, [round(d * 1000, 5) for d in deltas])
+
+    diffs_to_psu = [abs(d - delta_psu) for d in deltas]
+    feedback_idx = diffs_to_psu.index(min(diffs_to_psu))
     measurement_idx = 1 - feedback_idx
 
     if deltas[feedback_idx] < min_delta_current:
         raise RuntimeError(
             "Ни один из мультиметров не увидел роста тока при пробном "
-            f"напряжении {probe_voltage}В (дельты: {[round(d*1000, 5) for d in deltas]} мА) "
-            "— похоже, петля возбуждения разомкнута. Проверь подключение источника."
+            f"напряжении {probe_voltage}В (дельты: {[round(d*1000, 5) for d in deltas]} мА, "
+            f"источник: {delta_psu*1000:.5f} мА) — похоже, петля возбуждения "
+            "разомкнута. Проверь подключение источника."
         )
 
     return {
         "feedback": multimeter_entries[feedback_idx],
         "measurement": multimeter_entries[measurement_idx],
         "deltas_ma": [d * 1000 for d in deltas],
+        "delta_psu_ma": delta_psu * 1000,
     }
