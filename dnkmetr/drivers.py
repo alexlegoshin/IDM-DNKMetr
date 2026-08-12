@@ -17,6 +17,12 @@ from pyvisa.constants import Parity, StopBits
 _PARITY = {"none": Parity.none, "odd": Parity.odd, "even": Parity.even}
 _STOP_BITS = {1: StopBits.one, 1.5: StopBits.one_and_a_half, 2: StopBits.two}
 
+_DEFAULT_BAUD_CANDIDATES = [9600, 19200, 38400, 57600, 115200]
+# baud_rate — настройка САМОГО ПРИБОРА (передняя панель), не свойство модели: два
+# физических экземпляра GPP-4323 в этом проекте были настроены на разные скорости
+# (115200 и 9600, см. gwinstek_psu_generic.json notes, эпизод 12.08.2026). Перебор
+# — самый надёжный способ не зависеть от того, что кто-то поменял baud руками.
+
 _NUMBER_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
 
 
@@ -48,14 +54,46 @@ class ScpiInstrument:
         self.inst.read_termination = conn.get("read_termination", "\n")
 
         if conn.get("type") == "serial":
-            self.inst.baud_rate = conn["baud_rate"]
             self.inst.data_bits = conn.get("data_bits", 8)
             self.inst.parity = _PARITY[conn.get("parity", "none")]
             self.inst.stop_bits = _STOP_BITS[conn.get("stop_bits", 1)]
-            # На реальном COM-порту после (пере)подключения в буфере иногда остаётся
-            # мусор от предыдущей сессии — без сброса первый query() может словить
-            # длинный VI_ERROR_TMO вместо ответа на самом деле исправного прибора.
+
+            if conn.get("baud_rate") == "auto":
+                baud, idn_reply = self._detect_baud(
+                    conn.get("baud_rate_candidates", _DEFAULT_BAUD_CANDIDATES)
+                )
+                if baud is None:
+                    raise RuntimeError(
+                        f"Не удалось определить baud rate для {resource_name}: "
+                        f"ни одна из скоростей {conn.get('baud_rate_candidates', _DEFAULT_BAUD_CANDIDATES)} "
+                        "не дала ответа на idn-команду."
+                    )
+                self.inst.baud_rate = baud
+                print(f"[drivers] {resource_name}: автоопределён baud_rate={baud} (idn={idn_reply!r})")
+            else:
+                self.inst.baud_rate = conn["baud_rate"]
+                # На реальном COM-порту после (пере)подключения в буфере иногда остаётся
+                # мусор от предыдущей сессии — без сброса первый query() может словить
+                # длинный VI_ERROR_TMO вместо ответа на самом деле исправного прибора.
+                self.inst.clear()
+
+    def _detect_baud(self, candidates):
+        """Перебирает скорости, пока idn-команда не даст непустой ответ.
+
+        Используется только для serial-соединений с baud_rate: "auto" в профиле.
+        Возвращает (baud, idn_reply) или (None, None), если ни одна не подошла.
+        """
+        idn_cmd = self._commands.get("idn", "*IDN?")
+        for baud in candidates:
+            self.inst.baud_rate = baud
             self.inst.clear()
+            try:
+                reply = self.inst.query(idn_cmd).strip()
+            except Exception:
+                continue
+            if reply:
+                return baud, reply
+        return None, None
 
     def _cmd(self, name, **kwargs):
         return self._commands[name].format(**kwargs)
