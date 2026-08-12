@@ -202,8 +202,8 @@ class App:
                                 if result["feedback_a"] is not None else "—")
                 acc = result["accuracy"]
                 if acc["computed"]:
-                    acc_str = (f"γ={acc['gamma_percent']:.4f}% (ГОСТ 8.401-80, "
-                              f"номинал {acc['nominal_a']*1000:.1f} мА, "
+                    acc_str = (f"погрешность={acc['relative_error_percent']:.4f}% "
+                              f"(ожидание {acc['expected_a']*1000:.1f} мА, "
                               f"Δ={acc['delta_a']*1000:.4f} мА)")
                 else:
                     acc_str = acc["note"]
