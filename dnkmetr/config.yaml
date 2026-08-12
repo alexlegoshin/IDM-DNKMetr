@@ -18,8 +18,8 @@ controller: software_pi
 # только если ровно один источник питания и ровно один/два мультиметра видны на шине —
 # при другом количестве или если auto_detect не задан (по умолчанию), используются
 # explicit profile/resource ниже как раньше.
-# auto_detect: true
 instruments:
+  auto_detect: true
   power_supply:
     profile: "instruments/gwinstek_psu_generic.json"
     resource: "ASRL5::INSTR"  # COM5, 12.08.2026 — VISA-ресурс сместился с ASRL4 на ASRL5
@@ -31,15 +31,17 @@ instruments:
 
   # feedback_multimeter — в контуре обратной связи: держит основной ток возбуждения
   # через датчик на уставке (SoftwarePIController читает именно его на каждом шаге).
-  # RIGOL временно снят с этой роли — подозрение на частично перегоревший предохранитель
-  # токового входа (см. instruments/rigol_dm3068.json notes и README.md корня репозитория).
-  # 12.08.2026: посажен второй физический экземпляр АКИП-B7-78/1 (SN:TW00053316,
-  # тот же профиль akip_b778.json, что и у measurement_multimeter — модель одна и та же,
-  # физически разные приборы). Если понадобится вернуть RIGOL — profile:
-  # "instruments/rigol_dm3068.json", resource: "USB0::0x1AB1::0x0C94::DM3O274802599::INSTR".
+  # 12.08.2026 (вечер): RIGOL вернули на эту роль вместо второго АКИП (TW00053316,
+  # больше не подключён — VI_ERROR_RSRC_NFOUND, если оставить его resource здесь).
+  # Живьём отвечает на *IDN? нормально, никакого "remote"-переключения не требует
+  # (в отличие от GPP-4323) — RSRC_NFOUND был просто из-за несовпадения config.yaml
+  # с реальной физической конфигурацией, а не из-за состояния самого RIGOL.
+  # Предохранитель токового входа (см. instruments/rigol_dm3068.json notes) всё ещё
+  # НЕ проверен омметром — риск воспроизведения прежней проблемы (показания ~1/40-1/50
+  # от реального тока) остаётся, проверить check_feedback_path() в первую очередь.
   feedback_multimeter:
-    profile: "instruments/akip_b778.json"
-    resource: "USB0::0x164E::0x0DAD::TW00053316::INSTR"
+    profile: "instruments/rigol_dm3068.json"
+    resource: "USB0::0x1AB1::0x0C94::DM3O274802599::INSTR"
 
   # measurement_multimeter — читает ВЫХОДНОЙ сигнал датчика один раз после стабилизации
   # тока в контуре ОС. Выход датчика ТОКОВЫЙ (не потенциальный) — значит АКИП должен
