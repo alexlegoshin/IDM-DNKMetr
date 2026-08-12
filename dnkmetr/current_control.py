@@ -42,11 +42,13 @@ class HardwareCCController:
             self.arm()
         return self.dmm.measure_dc_current()
 
-    def is_stable(self, current, window):
+    def is_stable(self, current, window, deadband=None):
+        if deadband is None:
+            deadband = self.deadband
         window.append(current)
         if len(window) > 5:
             window.pop(0)
-        return _window_is_stable(window, 5, self.deadband * 2, self.setpoint, self.deadband * 3)
+        return _window_is_stable(window, 5, deadband * 2, self.setpoint, deadband * 3)
 
 
 class SoftwarePIController:
@@ -138,24 +140,15 @@ class SoftwarePIController:
     def saturated_steps(self):
         return self._saturated_steps
 
-    def coarse_seed(self, tol_v=0.02, max_iters=25, settle_s=0.5):
-        """Бинарный поиск стартового напряжения перед точной ПИ-подстройкой.
-
-        Линейный разгон step()-ом со slew-rate лимитом тратит десяток+ шагов
-        только на то, чтобы "нащупать" примерный рабочий диапазон напряжения
-        (см. журнал испытаний 29.07.2026 — ~9-13 с до выхода в окрестность
-        уставки). Бисекция находит ту же окрестность за log2(диапазон/точность)
-        шагов (~10-12 при tol_v=0.02В на диапазоне 0-60В), т.к. ток растёт
-        монотонно с напряжением у резистивной/квазирезистивной нагрузки. После
-        неё step()/ПИ включается уже почти без ошибки — доводит точность и
-        отслеживает медленный тепловой дрейф, а не тратит время на разгон.
+    def _bisect(self, lo, hi, tol_v, max_iters, settle_s):
+        """Общее ядро бисекции — используется и coarse_seed() (полный диапазон
+        с нуля), и reseed_from_current() (узкий скачок вокруг текущей точки).
 
         Предполагает МОНОТОННУЮ зависимость тока от напряжения у рабочей точки —
         для резистивного тестового шунта это точно так, для реального датчика
-        надо будет перепроверить перед использованием на нём.
+        надо перепроверять перед использованием на нём.
         """
-        lo, hi = 0.0, self.max_voltage
-        v = 0.0
+        v = lo
         for i in range(max_iters):
             if hi - lo < tol_v:
                 break
@@ -178,8 +171,51 @@ class SoftwarePIController:
         self._saturated_steps = 0
         return self._voltage, final_current, i + 1
 
-    def is_stable(self, current, window):
+    def coarse_seed(self, tol_v=0.02, max_iters=25, settle_s=1.0):
+        """Бинарный поиск стартового напряжения ПО ВСЕМУ диапазону [0, max_voltage]
+        перед точной ПИ-подстройкой — для старта "с нуля".
+
+        Линейный разгон step()-ом со slew-rate лимитом тратит десяток+ шагов
+        только на то, чтобы "нащупать" примерный рабочий диапазон напряжения
+        (см. журнал испытаний 29.07.2026 — ~9-13 с до выхода в окрестность
+        уставки). Бисекция находит ту же окрестность за log2(диапазон/точность)
+        шагов (~10-12 при tol_v=0.02В на диапазоне 0-60В), т.к. ток растёт
+        монотонно с напряжением у резистивной/квазирезистивной нагрузки. После
+        неё step()/ПИ включается уже почти без ошибки — доводит точность и
+        отслеживает медленный тепловой дрейф, а не тратит время на разгон.
+
+        settle_s=1.0 (было 0.5): на реальном датчике (в отличие от резистивных
+        тестовых нагрузок, на которых бисекция изначально проверялась) отклик
+        ощутимо запаздывает — при 0.5с бисекция читала ток ДО того, как он
+        успевал устояться, и стабильно занижала его, из-за чего финальная точка
+        поиска оказывалась намного правее нужной (пример 12.08.2026: искали
+        10 мА, бисекция сошлась на точке, где ток ПОЗЖЕ устоялся на 13.6 мА —
+        почти вдвое больше запаса по aппаратному current_limit, ПИ потом долго
+        откатывал напряжение назад). Более длительное ожидание на каждом шаге
+        напрямую устраняет этот перезаброс, а не просто "удлиняет поиск".
+        """
+        return self._bisect(0.0, self.max_voltage, tol_v, max_iters, settle_s)
+
+    def reseed_from_current(self, jump_v=10.0, tol_v=0.02, max_iters=25, settle_s=1.0):
+        """Узкая бисекция вокруг ТЕКУЩЕГО напряжения — резервный вариант, когда
+        обычный step()/ПИ потерял управляемость (см. measure_one(), поймал
+        max_saturated_steps) и не может сам вернуться к уставке. В отличие от
+        coarse_seed() не отбрасывает уже найденную рабочую точку и не ищет
+        заново по всему [0, max_voltage] (это было бы намного дольше) — берёт
+        разумный скачок ±jump_v вокруг self._voltage и бисектит только в этом
+        окне."""
+        lo = max(0.0, self._voltage - jump_v)
+        hi = min(self.max_voltage, self._voltage + jump_v)
+        return self._bisect(lo, hi, tol_v, max_iters, settle_s)
+
+    def is_stable(self, current, window, deadband=None):
+        """deadband можно переопределить на конкретный вызов (см. measure_one(),
+        точная стадия после базовой стабилизации использует более тугой допуск,
+        не трогая self.deadband — им продолжает пользоваться сам расчёт ошибки
+        нигде, deadband участвует только в критерии стабильности)."""
+        if deadband is None:
+            deadband = self.deadband
         window.append(current)
         if len(window) > 5:
             window.pop(0)
-        return _window_is_stable(window, 5, self.deadband * 2, self.setpoint, self.deadband * 3)
+        return _window_is_stable(window, 5, deadband * 2, self.setpoint, deadband * 3)
