@@ -15,13 +15,27 @@ import glob
 import json
 import logging
 import os
+import sys
 import time
 
 import pyvisa
 
 from drivers import PowerSupply, Multimeter, _DEFAULT_BAUD_CANDIDATES
 
-DEFAULT_INSTRUMENTS_DIR = os.path.join(os.path.dirname(__file__), "instruments")
+# В собранном PyInstaller-exe (--onefile) __file__ этого модуля указывает во
+# временную распакованную папку (_MEIPASS), а не туда, где реально лежит
+# instruments/ (рядом с exe) — тот же класс бага, что уже был учтён в ui.py
+# для wiring_diagram.png, но здесь был пропущен: load_profiles() смотрел в
+# несуществующий путь, тихо получал пустой список профилей, и ВСЕ приборы
+# (включая источник) стабильно, детерминированно проваливали сопоставление
+# по IDN — не потому что не отвечали (отвечали!), а потому что сравнивать
+# их IDN было не с чем (эпизод 12.08.2026, см. dnkmeter.log).
+if getattr(sys, "frozen", False):
+    _BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+DEFAULT_INSTRUMENTS_DIR = os.path.join(_BASE_DIR, "instruments")
 
 log = logging.getLogger(__name__)
 
