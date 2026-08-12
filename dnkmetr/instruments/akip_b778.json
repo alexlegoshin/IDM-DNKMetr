@@ -2,6 +2,7 @@
   "vendor": "АКИП (Prist/PicoTest)",
   "model": "АКИП-B7-78/1 (V7-78/1)",
   "role": "multimeter",
+  "idn_match": ["V7-78", "PICOTEST", "AKIP-B7-78"],
   "verified": true,
   "notes": "Проверено вживую 29.07.2026: USB-TMC, VID_164E (Picotest Corp.) PID_0DAD, *IDN? -> 'Prist,V7-78/1,TW00053362,03.45-01-04'. В отличие от профиля-первоисточника (IVtrace_dev/instruments/multimeters/akipb778.json, там SENS:FUNC+RANG:AUTO OFF+READ?), здесь используются обычные одношаговые MEAS:VOLT:DC?/MEAS:CURR:DC? — оба протестированы напрямую и отвечают корректно, доп. настройка функции/диапазона не потребовалась. Сверено 12.08.2026 со свежей версией IVTrace-dev/IDM-IVTrace (instruments/multimeters_current и _voltage/akipb778.json, платформа Agilent/Keysight 34401A) — там для этой же модели тоже отмечено, что MEAS:VOLT:DC? самодостаточна (не нужна доп. настройка), что согласуется с прямой проверкой здесь. Диапазоны DCV по документации 34401A-платформы: 0.1/1/10/100/1000 В (НЕ 0.2/2/20/200/1000, как у Siglent/Rigol) — не используется в этом проекте (ручной диапазон не подключён), но важно, если он понадобится позже.",
   "connection": {
