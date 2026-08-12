@@ -43,46 +43,52 @@ def _match_profile(idn, profiles):
     return None, None
 
 
-def _probe_idn(rm, resource, timeout_ms=3000):
+def _try_idn(rm, resource, timeout_ms, baud=None):
+    """Одна попытка открыть ресурс и получить *IDN?. baud=None — не serial
+    (USB0/GPIB/TCPIP, настройки VISA по умолчанию)."""
+    try:
+        inst = rm.open_resource(resource)
+        inst.timeout = timeout_ms
+        inst.write_termination = "\n"
+        inst.read_termination = "\n"
+        if baud is not None:
+            inst.baud_rate = baud
+            inst.data_bits = 8
+            inst.clear()
+        reply = inst.query("*IDN?").strip()
+        inst.close()
+        return reply if reply else None
+    except Exception:
+        try:
+            inst.close()
+        except Exception:
+            pass
+        return None
+
+
+def _probe_idn(rm, resource, timeout_ms=3000, retries=2, retry_delay_s=0.3):
     """Пытается получить *IDN? с ресурса без знания, какой это прибор.
 
     Для ASRL (serial) перебирает стандартные скорости — на этом этапе профиль
     ещё не выбран, поэтому берём общий список кандидатов из drivers.py, а не
     настройку конкретного JSON. Для остальных типов (USB0/GPIB/TCPIP) скорость
     не нужна — открывается с настройками VISA по умолчанию.
-    """
-    if resource.upper().startswith("ASRL"):
-        for baud in _DEFAULT_BAUD_CANDIDATES:
-            try:
-                inst = rm.open_resource(resource)
-                inst.timeout = timeout_ms
-                inst.write_termination = "\n"
-                inst.read_termination = "\n"
-                inst.baud_rate = baud
-                inst.data_bits = 8
-                inst.clear()
-                reply = inst.query("*IDN?").strip()
-                inst.close()
-                if reply:
-                    return reply
-            except Exception:
-                try:
-                    inst.close()
-                except Exception:
-                    pass
-                continue
-        return None
 
-    try:
-        inst = rm.open_resource(resource)
-        inst.timeout = timeout_ms
-        inst.write_termination = "\n"
-        inst.read_termination = "\n"
-        reply = inst.query("*IDN?").strip()
-        inst.close()
-        return reply if reply else None
-    except Exception:
-        return None
+    retries=2 на каждую комбинацию (не только на весь перебор бодов целиком) —
+    у GPP-4323 на стенде бывают кратковременные пропадания ответа по USB-serial
+    (см. README.md, "Симптом 2" в саге про этот прибор): без повтора единичный
+    таймаут на правильном бауде выглядел как "источник не найден", хотя прибор
+    жив и уже через секунду снова отвечает нормально (эпизод 12.08.2026, вечер).
+    """
+    bauds = _DEFAULT_BAUD_CANDIDATES if resource.upper().startswith("ASRL") else [None]
+    for baud in bauds:
+        for attempt in range(retries):
+            reply = _try_idn(rm, resource, timeout_ms, baud)
+            if reply:
+                return reply
+            if attempt < retries - 1:
+                time.sleep(retry_delay_s)
+    return None
 
 
 def discover_all(instruments_dir=DEFAULT_INSTRUMENTS_DIR, timeout_ms=3000):
